@@ -1,1 +1,4 @@
-\Data
+/Data
+/.Rproj.user
+*.xlsx
+*.csv
