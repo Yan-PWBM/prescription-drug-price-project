@@ -1,0 +1,102 @@
+---
+title: "Stat521 Final Project"
+author: 'Yan He'
+date: 'April 2021'
+output:
+  pdf_document: default
+# html_document: default
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE) 
+library(dplyr)
+library(tidyverse)
+library(foreign)
+```  
+
+```{r}
+# # transfer 2017 Rx data into .Rdata
+# rx2017 <- read.dta("Data/PrescriptionMedicine/H197A.dta")
+# save(rx2017, file = "Data/rx2017.Rdata")
+```
+
+```{r}
+# Read the data
+# NOTE: To load data, you must download both the extract's data and the DDI
+# and also set the working directory to the folder with these files (or change the path below).
+# FROM LINE 22-25 ARE CODES
+# if (!require("ipumsr")) stop("Reading IPUMS data into R requires the ipumsr package. It can be installed using the following command: install.packages('ipumsr')")
+# ddi <- read_ipums_ddi("Data/meps_00006.xml")
+# ipumsmeps_all <- read_ipums_micro(ddi)
+# save(ipumsmeps_all, file = "Data/MEPS_2007to2018.rda")
+load("Data/MEPS_2007to2018.rda")
+load("Data/rx2018.Rdata")
+load("Data/rx2017.Rdata")
+load("Data/fyc2018.Rdata")
+load("Data/fyc2017.Rdata")
+# load("Data/longitudinal2018.Rdata")
+```
+
+```{r}
+# keep the needed variables for the IPUMS MEPS data (full year data)
+varlist <- c('YEAR', 'PID', 'DUID', 'DUPERSID', 'MEPSID', 'AGE', 'AGELAST', 'SEX','MARSTAT', 'EDUCYR',"EDUC", "HIDEG",
+             'REGIONMEPS', "FAMSIZE", "RACEA", "YRSINUS", "HISPYN", "USBORN", "OTHLANGWELL", 
+             "FTOTINCMEPS", 'INCTOT', 'INCWAGE', "CPI2009", "FTOTVAL", "POVCAT", "POVLEV",
+             "FILESTATUS", "FILEPRIM", "FILEDEPYN", "FILEISDEP", "SAQELIG", 'HEALTH', "USUALPL", 
+             "USCMEDTYP", "USCTRVLTIM", 'HINOTCOV', 'HIPRIVATE', 'HICHAMPANY', 'HIMACHIP',
+             'HIMCARE', "HIOTHGOVA", "HIOTHGOVB", 'COVERTYPE', 'COVTYPEAGE',
+             "ANYLMT", "CANCEREV", "DIABETICEV", "INSULIN", "DIAPILLS", "CHGTOT", 'EXPTOT',
+             "OBTOTVIS", "OPTOTVIS", "ERTOTVIS", "HPTOTDIS", 'RXPRMEDSNO', "RXEXPTOT", 
+             "RXEXPSRC", "RXEXPSELF", "RXEXPMC", "RXEXPMA", "RXEXPPR", "RXEXPVA", "RXEXPTR",
+             "RXEXPOF", "RXEXPOL", "RXEXPWC", "RXEXPOPR","RXEXPOPU", "RXEXPOS", "RXEXPPTR",
+             "RXEXPOTH", "ADDAYA", "PHQ2", 'PERWEIGHT', 'PEGJA', 'PEGFE', 'PEGMA','PEGAP',
+             'PEGMY', 'PEGJU', 'PEGJL', 'PEGAU', 'PEGSE', 'PEGOC', 'PEGNO', 'PEGDE',
+             'POGJA', 'POGFE', 'POGMA','POGAP','POGMY', 'POGJU', 'POGJL', 'POGAU', 
+             'POGSE', 'POGOC', 'POGNO', 'POGDE')
+
+meps <- ipumsmeps_all[,varlist]
+names(meps) <- tolower(names(meps))
+save(meps, file = "Data/MEPS_for_analysis.rda")
+# lapply(dt, attr, "labels")
+```
+
+```{r}
+# keep the needed variables for the prescribed medicine files
+varlist <- c('DUID', 'DUPERSID','PANEL','PERWT18F','RXDAYSUP','RXFORM','RXFRMUNT','RXMD18X',
+             'RXMR18X','RXNDC','RXOF18X','RXOR18X','RXOT18X','RXOU18X','RXPV18X','RXQUANTY',
+             'RXSF18X','RXSL18X','RXSTRUNT','RXTR18X','RXVA18X','RXWC18X','RXXP18X','TC1')
+rx18 <- rx2018[,varlist]
+names(rx18) <- tolower(names(rx18))
+save(rx18, file = "Data/rx18_for_analysis.rda")
+
+varlist <- c('DUID', 'DUPERSID','PANEL','PERWT17F','RXDAYSUP','RXFORM','RXFRMUNT','RXMD17X',
+             'RXMR17X','RXNDC','RXOF17X','RXOR17X','RXOT17X','RXOU17X','RXPV17X','RXQUANTY',
+             'RXSF17X','RXSL17X','RXSTRUNT','RXTR17X','RXVA17X','RXWC17X','RXXP17X','TC1')
+rx17 <- rx2017[,varlist]
+names(rx17) <- tolower(names(rx17))
+save(rx17, file = "Data/rx17_for_analysis.rda")
+```
+
+```{r}
+# keep the needed variables for the annual data 
+# (Medicare Part B, D and Advantage Plan coverage)
+# (Group Insurance coverage)
+varlist <- c('DUID', 'DUPERSID','PANEL', 'MCRPB18', 'MCRPB31', 'MCRPB42', 'MCRPD18X', 
+             'MCRPD31X', 'MCRPD42X', 'MCRPHO18', 'MCRPHO31', 'MCRPHO42', 
+             'EMPST31', 'EMPST42', 'EMPST53', 'EMPST31H', 'EMPST42H', 'EMPST53H',
+             'SPOUID18', 'SPOUID31', 'SPOUID42', 'PEGJA18', 'PEGFE18','PEGMA18', 'PEGAP18',
+             'PEGMY18', 'PEGJU18', 'PEGJL18', 'PNGAU18', 'PEGSE18', 'PEGOC18', 'PEGNO18', 'PEGDE18')
+
+fyc2018 <- h209[,varlist]
+names(fyc2018) <- tolower(names(fyc2018))
+save(fyc2018, file = "Data/fyc2018_for_analysis.rda")
+
+varlist <- c('DUID', 'DUPERSID','PANEL', 'MCRPB17', 'MCRPB31', 'MCRPB42', 'MCRPD17X', 
+             'MCRPD31X', 'MCRPD42X', 'MCRPHO17', 'MCRPHO31', 'MCRPHO42', 
+             'EMPST31', 'EMPST42', 'EMPST53', 'EMPST31H', 'EMPST42H', 'EMPST53H',
+             'SPOUID17', 'SPOUID31', 'SPOUID42', 'PEGJA17', 'PEGFE17','PEGMA17', 'PEGAP17',
+             'PEGMY17', 'PEGJU17', 'PEGJL17', 'PNGAU17', 'PEGSE17', 'PEGOC17', 'PEGNO17', 'PEGDE17')
+fyc2017 <- h201[,varlist]
+names(fyc2017) <- tolower(names(fyc2017))
+save(fyc2017, file = "Data/fyc2017_for_analysis.rda")
+```

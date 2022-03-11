@@ -1,0 +1,427 @@
+---
+title: "Stat521 Final Project"
+author: 'Yan He'
+date: 'April 2021'
+output:
+  # pdf_document: default
+  html_document: default
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE) 
+# Load libraries
+library("lmtest")
+library("sandwich")
+library('tidyverse')
+library('plm')
+# CPI
+# https://meps.ipums.org/meps/userNotes_cpi2009.shtml
+```  
+
+```{r}
+#########################################################################################
+##### Process the MEPS FYC data, identify whether the person has Medicare part D coverage
+# 2018 data
+load("Data/fyc2018_for_analysis.rda")
+fyc2018['mcrpho'] <- 0
+fyc2018[fyc2018$mcrpho18==1 | fyc2018$mcrpho31==1 | fyc2018$mcrpho42==1,'mcrpho'] <- 1
+
+fyc2018['mcrpb'] <- 0
+fyc2018[fyc2018$mcrpb18==1 | fyc2018$mcrpb31==1 | fyc2018$mcrpb42==1,'mcrpb'] <- 1
+
+fyc2018['mcrpd'] <- 0
+fyc2018[fyc2018$mcrpd18x==1 | fyc2018$mcrpd31x==1 | fyc2018$mcrpd42x==1,'mcrpd'] <- 1
+
+fyc2018['employed'] <- 0 # employment status
+fyc2018[fyc2018$empst31h==1 | fyc2018$empst42h==1 | fyc2018$empst53h==1,'mcrpd'] <- 1
+
+fyc2018['mepsid'] <- fyc2018$dupersid
+fyc2018['year'] <- 2018
+fyc2018 <- fyc2018[,c('year', 'mepsid', 'mcrpho', 'mcrpb', 'mcrpd', 'employed')]
+
+# 2017 data
+load("Data/fyc2017_for_analysis.rda")
+fyc2017['mcrpho'] <- 0
+fyc2017[fyc2017$mcrpho17==1 | fyc2017$mcrpho31==1 | fyc2017$mcrpho42==1,'mcrpho'] <- 1
+
+fyc2017['mcrpb'] <- 0
+fyc2017[fyc2017$mcrpb17==1 | fyc2017$mcrpb31==1 | fyc2017$mcrpb42==1,'mcrpb'] <- 1
+
+fyc2017['mcrpd'] <- 0
+fyc2017[fyc2017$mcrpd17x==1 | fyc2017$mcrpd31x==1 | fyc2017$mcrpd42x==1,'mcrpd'] <- 1
+
+fyc2017['employed'] <- 0 # employment status
+fyc2017[fyc2017$empst31h==1 | fyc2017$empst42h==1 | fyc2017$empst53h==1,'mcrpd'] <- 1
+
+fyc2017['mepsid'] <- fyc2017$panel*100000000 + as.numeric(fyc2017$dupersid)
+fyc2017['mepsid'] <- as.character(fyc2017$mepsid)
+fyc2017['year'] <- 2017
+
+fyc2017 <- fyc2017[,c('year', 'mepsid', 'mcrpho', 'mcrpb', 'mcrpd', 'employed')]
+
+# append fyc 2017 and 2018 data
+fyc = rbind(fyc2017, fyc2018)
+```
+
+```{r}
+# Load the IPUMS MEPS data
+load("Data/MEPS_for_analysis.rda")
+# CPI
+# https://meps.ipums.org/meps/userNotes_cpi2009.shtml
+
+# fill the missing ages with the agelast variable
+meps[meps$age==99, 'age'] <- meps[meps$age==99, 'agelast']
+
+# fill out people who had positive prescription fills
+df <- meps %>%
+  filter(rxprmedsno>0 & year>=2017 & regionmeps>0) %>%
+  inner_join(fyc, by=c('year', 'mepsid'))
+
+df['agegrp'] <- 0
+df$agegrp[df$age>30 & df$age<=45] <-1
+df$agegrp[df$age>45 & df$age<=60] <-2
+df$agegrp[df$age>60 & df$age<=75] <-3
+df$agegrp[df$age>75] <-4
+table(df$agegrp)
+df$agegrp <- factor(df$agegrp, labels=c("<31", "31-45", "46-60", "61-75", ">75"))
+
+df$sex <- df$sex-1
+table(df$sex) 
+df$sex <- factor(df$sex, labels=c("Male", "Female"))
+
+# need to recode marital status var
+df["marriage"] <- 0 #"NotMarried"
+df$marriage[df$marstat == 10] <-1 #"Married"
+table(df$marriage)
+df$marriage <- factor(df$marriage, labels=c("Unmarried", "Married"))
+
+# need to recode race--White, Black, Alaskan Native or American Indian, 
+# Asian or Pacific Islander, Other
+df["race"] = 0 #"White"
+df$race[df$racea==200] <- 1 #"Black/African American"
+df$race[df$racea>300] <- 2 #"Other"
+table(df$race) 
+df$race <- factor(df$race, 
+                  labels=c("White", "Black/African American", "Other"))
+
+# maybe use educ to create a new education level
+df["edulvl"] <-0 #"NoDegree"
+df$edulvl[df$educ>400] <- 1
+df$edulvl[df$educ>=604] <- 2
+df$edulvl <- factor(df$edulvl,
+                    labels=c("HighSchool/GED or below", "SomeCollege or above",
+                             "OtherDegree or Unknown"))
+table(df$edulvl)
+
+# df["edulvl"] <-0 #"NoDegree"
+# df$edulvl[df$educ %in% c(301, 302)] <-1 #"HighSchoolDiplomaOrGED"
+# df$edulvl[df$educ==401] <- 2 #"SomeCollege"
+# df$edulvl[df$educ==500] <- 3 #"Bachelor"
+# df$edulvl[df$educ %in% c(601, 603)] <- 4 #"MasterOrAbove"
+# df$edulvl[df$educ==604] <- 5 #"OtherDegree"
+# df$edulvl[df$educ>900] <- 6 #"Unknown"
+# table(df$edulvl)
+# df$edulvl <- factor(df$edulvl, 
+#                     labels=c("NoDegree", "HighSchool/GED", "SomeCollege",
+#                              "Bachelor", "Master/Above", "OtherDegree", "Unknown"))
+
+df$povcat <- ifelse(df$povcat>=4, 1, 0)
+table(df$povcat)
+df$povcat <- factor(df$povcat, 
+                    labels=c("<200%", ">=200%"))
+# df$povcat <- df$povcat -1
+# table(df$povcat)
+# # 0-Negative or poor (<100% of poverty line)
+# # 1-Near poor (100-124% of poverty line)
+# # 2-Low income (125-199% of poverty line)
+# # 3-Middle income (200-399% of poverty line)
+# # 4-High income (>=400% of poverty line)
+# df$povcat <- factor(df$povcat, 
+#                     labels=c("<100%", "100-124%", "125-199%",
+#                              "200-399%", ">=400%"))
+
+df[df$regionmeps==0, 'regionmeps'] <- 5
+df$regionmeps <- df$regionmeps-1
+table(df$regionmeps) 
+df$regionmeps <- factor(df$regionmeps, 
+                        labels=c("Northeast", "Midwest", "South", "West"))
+
+df["immigr"] <- 0 #"NativeBorn"
+df$immigr[df$usborn != 20] <- 1 #"ImmigrantOrUnknown"
+table(df$immigr)
+df$immigr <- factor(df$immigr, labels=c("NativeBorn", "Immigrants/unk"))
+
+df$hispyn <- df$hispyn-1
+table(df$hispyn)
+df$hispyn <- factor(df$hispyn, labels=c("NonHispanic", "Hispanic"))
+
+df$usualpl[!df$usualpl %in% c(1,2)] <- 3 # unknown
+df$usualpl <- df$usualpl-1
+table(df$usualpl)
+df$usualpl <- factor(df$usualpl, labels=c("No", "Yes", "unk"))
+
+# create dummy indicating whether the person is covered by employer/union/other group insurance.
+df['pegcov'] <- ifelse(df$pegja==2 | df$pegfe==2 | df$pegma==2 | df$pegap==2 | 
+                          df$pegmy==2 | df$pegju==2 | df$pegjl==2 | df$pegau==2 |
+                          df$pegse==2 | df$pegoc==2 | df$pegno==2 | df$pegde==2, 1, 0)
+df['pogcov'] <- ifelse(df$pogja==2 | df$pogfe==2 | df$pogma==2 | df$pogap==2 | 
+                          df$pogmy==2 | df$pogju==2 | df$pogjl==2 | df$pogau==2 |
+                          df$pogse==2 | df$pogoc==2 | df$pogno==2 | df$pogde==2, 1, 0)
+# any employer/group/union coverage
+df['pgrcov'] <- ifelse(df$pegcov==1 | df$pogcov==1, 1, 0)
+
+# for the health insurance, there are many combinations
+# Medicaid only, Medicare only, Private Health Insurance only(including VA/Tricare)
+# Medicaid and other Insurance, Other insurances, Uninsured.
+# OR
+# Medicaid only, Medicare only, Private Health Insurance only(including VA/Tricare)
+# Medicaid and Medicare, Medicare and Private,  Other insurances, Uninsured.
+df$hiprivate <- df$hiprivate-1
+df$himcare <- df$himcare-1
+df$himachip <- df$himachip-1
+df$hichampany <- df$hichampany-1
+df["instypetot"] <- df$hiprivate+df$himcare+df$himachip+df$hichampany
+table(df$instypetot)
+# 0     1       2       3        4 
+# 19559 166736  40261   1977     30 
+
+df["instype"] <- 5 # uninsured
+df$instype[df$instypetot==1 & df$himachip==1] <- 0 # Medicaid only
+# Medicare only or Covered by Medicare Part D
+df$instype[(df$instypetot==1 & df$himcare==1) | 
+             (df$instypetot>1 & df$himcare==1 & df$mcrpd==1 & (df$employed==0 | df$pgrcov ==0))] <- 1
+# Covered by Medicare but no Part D coverage (Medicare or Medicare combination)
+df$instype[df$instypetot>1 & df$himcare==1 & df$instype>1] <- 2 # & df$rxexpmc>0
+# df$instype[df$instypetot>1 & df$himcare==1 & df$himachip==0 & df$instype>1] <- 2 # & df$rxexpmc>0
+df$instype[(df$instypetot==1 & (df$hiprivate==1 | df$hichampany==1)) |
+             (df$instypetot==2 & df$hiprivate==1 & df$hichampany==1)] <- 3 # Private only
+df$instype[df$instypetot>1 & df$himachip==1 & df$himcare==0] <- 4 # Medicaid plus other insurances
+# df$instype[df$instype>4 & df$instypetot>1 & df$himachip==0 & df$himcare==0] <- 5 # No such case
+table(df$instype)
+
+df$instype <- factor(df$instype, 
+                     labels=c("Medicaid", "MedicarePartD", "Medicare+", "PHI",
+                              "Medicaid+", "Uninsured"))
+# df["instype"] <- 5 # uninsured
+# df$instype[df$instypetot==1 & df$himachip==1] <- 0 # Medicaid only
+# df$instype[df$instypetot==1 & df$himcare==1] <- 1 # Medicare only
+# df$instype[df$instypetot<=2 & (df$hiprivate==1 | df$hichampany==1)] <- 2 # Private only
+# df$instype[df$instypetot>1 & df$himachip==1] <- 3 # Medicaid and other insurances
+# df$instype[df$instypetot>1 & df$himachip==0] <- 4 # Other insurances without Medicaid
+# table(df$instype)
+# sum(table(df$instype))
+
+# create some other variables
+df['oopshare'] <- df$rxexpself/df$rxexptot
+df["totvists"] <- df$obtotvis + df$optotvis
+#table(df$totvists)
+
+# adjust the dollar into 2018 dollar amount (CPI is 4-digit number, so need to divide by 1000)
+df['rxexptot_adj'] <- df$rxexptot*df$cpi2009*0.854/1000
+df['logRxExp'] <- log(df$rxexptot_adj+1)
+
+# df['loginc'] <- log(df$inctot)
+df['exptot_adj'] <- df$exptot*df$cpi2009*0.854/1000
+df['loghealthexp'] <- log(df$exptot_adj+1)
+df['rxprmedsno_stnd'] <- (df$rxprmedsno-mean(df$rxprmedsno))/sd(df$rxprmedsno)
+df['rxprmedsno_sqr'] <- df$rxprmedsno^(1/2)
+df['rxprmedsno_qdr'] <- df$rxprmedsno^(1/3)
+df['logrxprmedsno'] <- log(df$rxprmedsno)
+df['logrxprmedsno_sqr'] <- df$logrxprmedsno^2
+# df['perfillrxexp'] <- df$rxexptot/df$rxprmedsno
+# df['logRxExp'] <- log(df$perfillrxexp)
+# df1 <- df[df$inctot>0,]
+# df1["loginc"] <- log(df1$inctot)
+# df["rxuselvl"] <- 0
+# df$rxuselvl[df$rxprmedsno>2 & df$rxprmedsno<=5] <- 1
+# df$rxuselvl[df$rxprmedsno>5 & df$rxprmedsno<=10] <- 2
+# df$rxuselvl[df$rxprmedsno>10 & df$rxprmedsno<=20] <- 3
+# df$rxuselvl[df$rxprmedsno>20 & df$rxprmedsno<=30] <- 4
+# df$rxuselvl[df$rxprmedsno>30 & df$rxprmedsno<=40] <- 5
+# df$rxuselvl[df$rxprmedsno>40 & df$rxprmedsno<=60] <- 6
+# df$rxuselvl[df$rxprmedsno>60] <- 7
+# table(df$rxuselvl)
+# df$rxuselvl <- factor(df$rxuselvl, 
+#                       labels=c("<3", "3-5", "6-10","11-20", "21-30",
+#                                "31-40", "41-60", ">60"))
+
+df['agesqr'] <- df$age^2
+df['totvisitsqr'] <- df$totvists^2
+# create a indicator of whether the person is above 18 or not
+# df['above18'] = ifelse(df$age>=18, 1, 0)
+# df$above18 <- factor(df$above18, labels=c("No", "Yes"))
+
+
+########################################################
+# restrict to people who are eligible for the SAQ part #
+########################################################
+
+table(df$saqelig)
+df_adt <- df %>%
+  filter(saqelig>1)
+# inctot>=0
+
+df_adt$health[df_adt$health %in% c(0,7,8,9)] <-6 # health status unknown
+df_adt$health <- df_adt$health -1
+# 0-Excellent, 1-very good, 2-good, 3-fair, 4-poor, 5-unknown
+df_adt$health.status <- 0
+df_adt[df_adt$health %in% c(0,1), 'health.status'] <- 1
+df_adt[df_adt$health %in% c(2,3,4), 'health.status'] <- 2
+df_adt[df_adt$health == 5, 'health.status'] <- 3
+df_adt$health.status <- factor(df_adt$health.status,
+                        labels=c("VeryGood/above", "Good/below", "Unknown"))
+
+# df_adt$health <- factor(df_adt$health, 
+#                         labels=c("Excellent", "VeryGood", "Good",
+#                                  "Fair", "Poor", "unk"))
+table(df_adt$health.status)
+
+df_adt$anylmt[df_adt$anylmt>2] <- 3
+df_adt$anylmt <- df_adt$anylmt-1
+df_adt$anylmt <- factor(df_adt$anylmt, 
+                        labels=c("No", "Yes", "unk"))
+table(df_adt$anylmt)
+# 0-No, 1-Yes, 2-unknown
+
+df_adt$diabeticev[df_adt$diabeticev>2 | df_adt$diabeticev==0] <- 1
+df_adt$diabeticev <- df_adt$diabeticev-1
+# recode do not know to 0, as not mentioned or do not know
+df_adt$diabeticev <- factor(df_adt$diabeticev, 
+                            labels=c("NotMention/unk", "Mentioned"))
+table(df_adt$diabeticev)
+
+df_adt$addaya[df_adt$addaya>2] <- 3 # unknown
+
+df_adt$addaya <- factor(df_adt$addaya, 
+                        labels=c("NotLimited", "AlittleLimited",
+                                 "LimitedAlot", "unk"))
+# Health now limits moderate activities
+# 0-Not limited, 1-Limited a little, 2-Limited a lot, 3-Unknown
+table(df_adt$addaya)
+
+# 3 or above-- major depressive disorder is likely.
+df_adt["likelydepressed"]<- 0 # no
+df_adt$likelydepressed[df_adt$phq2>=3 & df_adt$phq2<=6] <- 1 # yes
+df_adt$likelydepressed[df_adt$phq2>=96] <- 2 # unknown
+table(df_adt$likelydepressed)
+df_adt$likelydepressed <- factor(df_adt$likelydepressed, 
+                                 labels=c("No", "Yes", "unk"))
+
+# cols <- c('health', 'usualpl', 'anylmt', 'diabeticev', 'addaya',
+#           'likelydepressed')
+# df_adt[cols] <- lapply(df_adt[cols], factor) 
+
+# keep only needed variables 
+keep_var = c("year", "age", 'duid', "mepsid", "sex", "agegrp", "marriage", "race", "hispyn", "edulvl", "immigr", 
+             "regionmeps", "famsize", "inctot", "cpi2009", "povcat", "povlev", "saqelig", 
+             "health", "usualpl", "hinotcov", "hiprivate", "hichampany", "himachip","himcare", 
+             "hiothgova", "hiothgovb", "covertype", "anylmt", "cancerev", "diabeticev", 
+             "chgtot", "exptot", "rxprmedsno", "rxexptot", "rxexpself", "rxexpmc", "rxexpma", 
+             "rxexppr", "rxexpva", "rxexptr", "rxexpof", "rxexpol", "rxexpwc", "rxexpopr", 
+             "rxexpopu", "rxexpos", "rxexpptr", "rxexpoth", "addaya", "phq2", "perweight", 
+             "totvists", "logRxExp", "loghealthexp", "rxprmedsno_stnd", 
+             "logrxprmedsno", "logrxprmedsno_sqr", "agesqr", "totvisitsqr", "mcrpb", "mcrpd", "mcrpho",
+             "instype", "rxexptot_adj", "rxprmedsno_sqr", 'rxprmedsno_qdr', 'oopshare', 'pegcov', 'pogcov', 'pgrcov')
+
+meps_all <- df[, keep_var]
+meps_adt <- df_adt[, c(keep_var, "likelydepressed", 'health.status')]
+save(meps_all, file = "Data/meps_all_processed.rda")
+save(meps_adt, file='Data/meps_adult_processed.rda')
+```
+
+```{r}
+#######################################################################
+#####################Process the Rx data###############################
+load("Data/rx18_for_analysis.rda")
+load("Data/rx17_for_analysis.rda")
+
+rx17['mepsid'] <- (as.numeric(rx17$panel)+20)*100000000 + as.numeric(rx17$dupersid)
+rx17['mepsid'] <- as.character(rx17$mepsid)
+
+# change the factor to numeric for the TC1 variable
+rx17['tc1'] <- as.character(rx17$tc1)
+
+rx17['tc1'] <- gsub("[a-zA-Z]", "", rx17$tc1)
+rx17['tc1'] <- gsub("[/]", "", rx17$tc1)
+
+rx17['tc1'] <- gsub("[-]$", "", rx17$tc1)
+rx17['tc1'] <- as.numeric(rx17$tc1)
+
+# keep the people who prescribed only one type of Drug
+rx17 <- rx17 %>%
+  group_by(mepsid) %>%
+  mutate(tc.max = max(tc1),
+         tc.min = min(tc1),
+         daysup.max = max(rxdaysup),
+         daysup.min = min(rxdaysup)) %>%
+  filter(tc.min==tc.max & tc1>0) %>%
+  group_by(mepsid, tc1) %>%
+  summarise(rxfills = n(),
+            rxexp = sum(rxxp17x)) %>%
+  mutate(year=2017)
+
+rx18['mepsid'] <- rx18$dupersid
+rx18 <- rx18 %>%
+  group_by(mepsid) %>%
+  mutate(tc.max = max(tc1),
+         tc.min = min(tc1),
+         daysup.max = max(rxdaysup),
+         daysup.min = min(rxdaysup)) %>%
+  # specialty = ifelse(rxxp18x>200, 1, 0),
+  # use.specialty = max(specialty)
+  filter(tc.min==tc.max & tc1>0) %>%
+  group_by(mepsid, tc1) %>%
+  summarise(rxfills = n(),
+            rxexp = sum(rxxp18x))%>%
+  mutate(year=2018)
+rx <- rbind(rx17, rx18)
+rx['tc1'] <- as.factor(rx$tc1)
+save(rx, file='Data/rx_1718.rda')
+```
+
+```{r}
+#######################################################################
+#####Merge MEPS data with Rx TC data to get people who prescribed######
+#####unique type of drugs##############################################
+df <- meps_all[meps_all$year>=2017,]
+table(df$instype)
+
+uniqueRx_all <- df %>%
+  inner_join(rx, by=c('year', 'mepsid'))
+save(uniqueRx_all, file='Data/uniqueRx_all.rda')
+
+# adt
+df <- meps_adt[meps_adt$year>=2017,]
+table(df$instype)
+
+uniqueRx_adt <- df %>%
+  inner_join(rx, by=c('year', 'mepsid'))
+save(uniqueRx_adt, file='Data/uniqueRx_adt.rda')
+```
+
+```{r}
+###################################################################
+##################Process the longitudinal data ###################
+load('Data/meps_all_processed.rda')
+load('Data/meps_adult_processed.rda')
+
+# all people 
+meps_all2yr <- meps_all %>%
+  filter(year %in% c(2017,2018)) %>%
+  group_by(mepsid) %>%
+  mutate(idcnt = n()) %>%
+  filter(idcnt==2)
+table(meps_all2yr$idcnt)
+# We can actually get the longitudinal data directly from IPUMS MEPS
+save(meps_all2yr, file='Data/meps_all2yr.rda')
+
+# adults
+meps_adt2yr <- meps_adt %>%
+  filter(year %in% c(2017,2018)) %>%
+  group_by(mepsid) %>%
+  mutate(idcnt = n()) %>%
+  filter(idcnt==2)
+table(meps_adt2yr$idcnt)
+
+save(meps_adt2yr, file='Data/meps_adt2yr.rda')
+```

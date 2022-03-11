@@ -1,4 +1,6 @@
 *.xlsx
 *.csv
+*.Rhistory
 Analysis/.Rproj.user/
 Analysis/Data/
+*.RData

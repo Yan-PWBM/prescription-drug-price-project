@@ -1,0 +1,469 @@
+---
+title: "Stat521 Final Project"
+# author: 'Yan He'
+# date: 'April 2021'
+output:
+  # pdf_document: default
+  html_document:
+    toc: true
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE) 
+knitr::opts_chunk$set(fig.width=10, fig.height=6.5) 
+library(tidyverse)
+library(car)
+library(ggplot2)
+library(openxlsx)
+library(lmtest)
+library(sandwich)
+library(tidyverse)
+library(plm)
+library(stargazer)
+# packages to create table
+library(knitr)
+library(kableExtra)
+library(magrittr)
+
+library(dotwhisker)
+# install.packages('ggpubr')
+library(ggpubr)
+```  
+
+```{r, include=FALSE}
+# Read the data and further process a little bit
+load('Data/meps_adult_processed.rda') # the pooled data of everyone
+load('Data/uniqueRx_adt.rda')
+load('Data/meps_adt2yr.rda')
+
+uniquerx <- uniqueRx_adt[uniqueRx_adt$tc1 %in% c(1,40,57,97,122,133),]
+table(uniquerx$tc1)
+table(uniquerx$instype)
+table(uniquerx$tc1, uniquerx$instype)
+
+# create the data for the random effects model, need to have person id as the first column
+cols <- colnames(meps_adt2yr)
+meps_adt2yr['person'] <- meps_adt2yr$mepsid
+meps_adt2yr['time'] <- meps_adt2yr$year
+meps_adt2yr <- meps_adt2yr[,c('person','time', cols)]
+
+# make the year as factor
+meps_adt$year <- factor(meps_adt$year)
+meps_adt$year = relevel(meps_adt$year, ref='2018')
+meps_adt["RxCostPerfill"] <- meps_adt$rxexptot_adj/meps_adt$rxprmedsno
+
+meps_adt2yr$year <- factor(meps_adt2yr$year)
+meps_adt2yr$year = relevel(meps_adt2yr$year, ref='2018')
+meps_adt2yr["RxCostPerfill"] <- meps_adt2yr$rxexptot_adj/meps_adt2yr$rxprmedsno
+
+uniquerx$year <- factor(uniquerx$year)
+uniquerx$year = relevel(uniquerx$year, ref='2018')
+uniquerx["RxCostPerfill"] <- uniquerx$rxexptot_adj/uniquerx$rxprmedsno
+
+# N of each year
+table(meps_adt2yr$year)
+table(uniquerx$year)
+
+# check how many people in Medicare have Part D
+table(meps_adt[meps_adt$instype=='MedicarePartD', 'mcrpd'])
+table(meps_adt2yr[meps_adt2yr$instype=='MedicarePartD', 'mcrpd'])
+table(uniquerx[uniquerx$instype=='MedicarePartD', 'mcrpd'])
+```
+
+```{r message=FALSE, warning=FALSE}
+# function used to create the descriptive tables (of t-tests and anova)
+test <- function(dt, byvar) {
+  # by_var <- enquo(byvar) 
+  by_var <- rlang::sym(byvar)
+  temp <- dt %>%
+    group_by(!!by_var) %>%
+    summarise(mean=mean(logRxExp),
+              sd=sd(logRxExp),
+              N = n())
+  varname <- colnames(temp)[1] # mean of logRxExp by groups
+
+  # anova test/t-test
+  if (length(table(dt[,byvar])>2)) {
+    anv=anova(lm(dt[['logRxExp']] ~ dt[[byvar]]))
+    pval <- anv[['Pr(>F)']][1] # extract the p value
+  } else {
+    ttest=t.test(dt[['logRxExp']] ~ dt[[byvar]])
+    pval <- ttest[[3]]
+  }
+  
+  colnames(temp) <- c('var', 'mean', 'sd', 'N')
+  temp['pct'] <- round(temp$N/sum(temp$N)*100, 1)
+  temp['N'] <- paste0(temp$N, '(', temp$pct, ')')
+  temp <- temp %>%
+    select(-pct) %>%
+    add_row(var = varname, mean = NA, sd=NA, N=NA, .before = 1) %>%
+    mutate(p_val = ifelse(var==varname, pval, NA))
+  return (temp)
+}
+
+# pick a df and run testing for all categorical variables
+test_table <- function(df, uniquerx=F) {
+  test_tbl <- data.frame()
+  varlist <- c('sex', 'marriage', 'edulvl', 'race','hispyn', 'immigr',
+               'povcat', 'usualpl', 'regionmeps', 'instype','health.status', 'anylmt', 'diabeticev')
+  if (uniquerx==T){
+    varlist <- c(varlist, 'tc1')
+  }
+  for (var in varlist) {
+    temp <- test(df, var)
+    test_tbl <- rbind(test_tbl, temp)
+  }
+  
+  # format the table cells
+  test_tbl$mean.sd <- paste0(format(round(test_tbl$mean, 2), nsmall = 2),
+                     '(', format(round(test_tbl$sd, 2), nsmall = 2),')')
+  test_tbl$mean.sd[test_tbl$mean.sd=="  NA(  NA)"] <- NA
+  test_tbl$p_value <- format(round(test_tbl$p_val, 3), nsmall = 3)
+  test_tbl$p_value[is.na(test_tbl$p_val)]=NA
+  test_tbl$p_value[test_tbl$p_val<=0.001 & !is.na(test_tbl$p_val)] <- '<0.001***'
+  test_tbl$p_value[test_tbl$p_val<=0.01 & test_tbl$p_val>0.001 & !is.na(test_tbl$p_val)] <-
+    paste0(test_tbl$p_value[test_tbl$p_val<=0.01 & test_tbl$p_val>0.001 & !is.na(test_tbl$p_val)], "**")
+  test_tbl$p_value[test_tbl$p_val<=0.1 & test_tbl$p_val>0.01 & !is.na(test_tbl$p_val)] <-
+    paste0(test_tbl$p_value[test_tbl$p_val<=0.1 & test_tbl$p_val>0.01 & !is.na(test_tbl$p_val)], "*")
+  return (test_tbl)
+}
+```
+
+#### 1) Descriptive tables comparing logRxExp by groups
+```{r}
+tbl.2yr17 <- test_table(meps_adt2yr[meps_adt2yr$year==2017,])
+tbl.2yr17['id'] <- seq(1, nrow(tbl.2yr17),1)
+tbl.2yr18 <- test_table(meps_adt2yr[meps_adt2yr$year==2018,])
+tbl.2yr18['id'] <- seq(1, nrow(tbl.2yr18),1)
+tbl.rx17 <- test_table(uniquerx[uniquerx$year==2017,], T)
+tbl.rx17['id'] <- seq(1, nrow(tbl.rx17),1)
+tbl.rx18 <- test_table(uniquerx[uniquerx$year==2018,], T)
+tbl.rx18['id'] <- seq(1, nrow(tbl.rx18),1)
+
+# merge four outputs together
+keep_var <- c('var', 'mean.sd', 'N', 'p_value', 'id')
+tbl.2yr <-merge(tbl.2yr17[,keep_var], tbl.2yr18[,keep_var],
+             by=c('id', 'var'), all=T,
+             suffixes = c(".2yr17",".2yr18"), sort=F)
+tbl.rx <-merge(tbl.rx17[,keep_var], tbl.rx18[,keep_var],
+             by=c('id', 'var'), all=T,
+             suffixes = c(".rx17",".rx18"), sort=F)
+table_combined <- merge(tbl.2yr, tbl.rx,
+             by=c('id', 'var'), all=T,sort=F)
+
+# write.xlsx(table_combined,
+#            "descriptive_table.xlsx", col.names=T, row.names=F, overwrite = TRUE)
+# # kable(table_combined, "html") %>%
+# #   kable_styling(bootstrap_options = c("striped", "hover")) %>%
+# #   cat(., file = "descriptive_table.html")
+
+```
+
+#### 2) Summary statistics of continuous explanatory variables
+```{r message=FALSE, warning=FALSE}
+# rx count and oop share by insurance type
+time.series <- function(input) {
+  agg_ins <- input %>%
+    group_by(year,instype) %>%
+    summarise(mean_costperfill= mean(rxexptot_adj/rxprmedsno),
+            sd_costperfill= sd(rxexptot_adj/rxprmedsno),
+            med_costperfill= median(rxexptot_adj/rxprmedsno),
+            q25 = quantile(rxexptot_adj/rxprmedsno, 0.25),
+            q75 = quantile(rxexptot_adj/rxprmedsno, 0.75),
+            mean_rxn= mean(rxprmedsno),
+            sd_rxn= sd(rxprmedsno),
+            mean_oop= mean(oopshare, na.rm =T),
+            sd_oop= sd(oopshare, na.rm =T))
+  agg_ins['Rx Cost/fill(mean)'] <- paste0(
+    round(agg_ins$mean_costperfill,2), "(", round(agg_ins$sd_costperfill,2), ")")
+  agg_ins['Rx Cost/fill(median)'] <- paste0(
+    round(agg_ins$med_costperfill,2), "[", round(agg_ins$q25,2),", ", round(agg_ins$q75,2), "]")
+  agg_ins['Rx Count'] <- paste0(
+    round(agg_ins$mean_rxn,2), "(", round(agg_ins$sd_rxn,2), ")")
+  agg_ins['OOP share'] <- paste0(
+    round(agg_ins$mean_oop,2), "(", round(agg_ins$sd_oop,2), ")")
+  return(agg_ins)
+}
+byins.2yr <- time.series(meps_adt2yr)
+byins.rx <- time.series(uniquerx)
+
+# wb <- createWorkbook()
+# addWorksheet(wb, 'summary.stats')
+# addWorksheet(wb, 'byins.2yr')
+# addWorksheet(wb, 'byins.rx')
+# 
+# # output our model result into the worksheet
+# writeData(wb, 1, table_combined, rowNames = F, colNames = T)
+# writeData(wb, 2, byins.2yr, rowNames = F, colNames = T)
+# writeData(wb, 3, byins.rx, rowNames = F, colNames = T)
+# 
+# # save worksheet
+# saveWorkbook(wb, "descriptive_table.xlsx", overwrite = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+par(mfrow=c(2,2), tcl=-0.5, family="serif", mai=c(0.3,0.3,0.5,0.3))
+temp <- meps_adt2yr[meps_adt2yr$year==2017, ]
+plot(temp$instype, log(temp$RxCostPerfill), main="log Rx Cost Per fill, $ (2017) \ntwo-year longitudinal data", 
+     xlab='', ylab='',cex.main=1.5,cex.axis=1.1)
+temp <- meps_adt2yr[meps_adt2yr$year==2018, ]
+plot(temp$instype, log(temp$RxCostPerfill), main='log Rx Cost Per fill, $ (2018) \ntwo-year longitudinal data', 
+     xlab='', ylab='',cex.main=1.5,cex.axis=1.1)
+temp <- uniquerx[uniquerx$year==2017, ]
+plot(temp$instype, log(temp$RxCostPerfill), main="log Rx Cost Per fill, $ (2017) \ncohort with unique prescription drug class", 
+     xlab='', ylab='',cex.main=1.5,cex.axis=1.1)
+temp <- uniquerx[uniquerx$year==2018, ]
+plot(temp$instype, log(temp$RxCostPerfill), main="log Rx Cost Per fill, $ (2018) \ncohort with unique prescription drug class", 
+     xlab='', ylab='',cex.main=1.5,cex.axis=1.1)
+par(mfrow=c(1,1), mai=c(1.02,0.82,1.02,0.82))
+
+```
+
+#### 3) Scatter plot of logRxExp vs. continuous variables
+```{r message=FALSE, warning=FALSE}
+par(mfrow=c(2,2), tcl=-0.5, family="serif", mai=c(0.3,0.3,0.5,0.3))
+temp <- meps_adt2yr[meps_adt2yr$year==2017, ]
+plot(temp$logrxprmedsno, temp$logRxExp, main="log Rx Expenditure vs. log Rx counts (2017) \ntwo-year longitudinal data",
+     cex.main=1.5,cex.axis=1.1)
+temp <- meps_adt2yr[meps_adt2yr$year==2018, ]
+plot(temp$logrxprmedsno, temp$logRxExp, main='log Rx Expenditure vs. log Rx counts (2018) \ntwo-year longitudinal data',
+     cex.main=1.5,cex.axis=1.1)
+temp <- uniquerx[uniquerx$year==2017, ]
+plot(temp$logrxprmedsno, temp$logRxExp,main="log Rx Expenditure vs. log Rx counts (2017) \ncohort with unique prescription drug class",
+     cex.main=1.5,cex.axis=1.1)
+temp <- uniquerx[uniquerx$year==2018, ]
+plot(temp$logrxprmedsno, temp$logRxExp,main="log Rx Expenditure vs. log Rx counts (2018) \ncohort with unique prescription drug class",
+     cex.main=1.5,cex.axis=1.1)
+par(mfrow=c(1,1), mai=c(1.02,0.82,1.02,0.82))
+```
+
+### running the regression
+```{r message=FALSE, warning=FALSE}
+#############################################################
+#####Use data of all prescriptions to run the regression#####
+gols <- lm(logRxExp~year+instype+year*instype+edulvl+race+hispyn+immigr+famsize+
+               povcat+logrxprmedsno+regionmeps+anylmt+diabeticev, data=meps_adt)
+# coeftest(gols, vcov = vcovHC(gols, type = "HC1"))
+robust.gols <- sqrt(diag(vcovHC(gols, type="HC1")))
+
+pols <- plm(logRxExp~year+instype+year*instype+edulvl+race+hispyn+immigr+famsize+
+               povcat+logrxprmedsno+regionmeps+anylmt+diabeticev,
+            data=meps_adt2yr,model="pool")
+#coeftest(pols, vcov = vcovHC(pols, type = "HC1"))
+robust.pols <- sqrt(diag(vcovHC(pols, type="HC1")))
+
+re <- plm(logRxExp~year+instype+year*instype+edulvl+race+hispyn+immigr+famsize+
+               povcat+logrxprmedsno+regionmeps+anylmt+diabeticev, data=meps_adt2yr,model="random")
+# summary(re)
+# coeftest(re, vcov = vcovHC(re, type = "HC1"))
+robust.re <- sqrt(diag(vcovHC(re, type="HC1")))
+
+# models using the Unique Rx data
+rxols18 <- lm(logRxExp~instype+tc1+edulvl+immigr+famsize+logrxprmedsno+regionmeps+anylmt, data=uniquerx[uniquerx$year==2018,])
+robust.rxols18 <- sqrt(diag(vcovHC(rxols18, type="HC1")))
+# summary(rxols18)
+rxols1718 <- lm(logRxExp~year+instype+year*instype+tc1+edulvl+immigr+famsize+logrxprmedsno+regionmeps+anylmt, data=uniquerx)
+robust.rxols1718 <- sqrt(diag(vcovHC(rxols1718, type="HC1")))
+
+# fixed effects model
+fe <- plm(logRxExp~year+instype+year*instype+edulvl+race+hispyn+immigr+famsize+
+               povcat+logrxprmedsno+regionmeps+anylmt+diabeticev, data=meps_adt2yr,model="within")
+# summary(fe)
+coeftest(fe, vcov = vcovHC(fe, type = "HC1"))
+
+# stargazer(gols, pols, re, rxols18, rxols1718, type="html",
+#           se = list(robust.gols,robust.pols, robust.re, robust.rxols18, robust.rxols1718),
+#           dep.var.labels = "model for all prescription data",
+#           covariate.labels = c("Year2017", "Medicare PartD (ref: Medicaid Only)", "Medicare+", "PHI","Medicaid+","Uninsured", "Cardiovascular (ref: Anti-infectives)", "Central Nervous System Agents", "Hormones/Hormone Modifiers", "Respiratory Agents", "Topical Agents", "SomeCollege/above (ref: Below some college)","OtherDegree/Unknown","Black/African American (ref: White)", "Other","Hispanic (ref: Non-Hispanic)","Immigrants/Unknown (ref: Native)","Family size",">=200% FPL (ref: <200% FPL)", "Log Rx Count","Midwest (ref: East)","South","West", "Has Limitation(ref:No limitation)","Unknown","Ever had Diabetes (ref: No diabetes)", "Year2017:MedicarePartD", "Year2017:Medicare+","Year2017:PHI","Year2017:Medicaid+", "Year2017:Uninsured", "Constant"),
+#           column.labels = c("General OLS", "POLS", "Random Effects", "OLS_Rx18", "OLS_Rx1718"),
+#           title = "Table 3: Regression Results",
+#           digits = 2,
+#           model.numbers = F,
+#           font.size = "small",
+#           align = TRUE,
+#           no.space = TRUE,
+#           single.row = FALSE, out="model.htm")
+```
+
+### Visualization of the coefficients about health plan spending premium
+```{r}
+# diagnosis
+dig <- function(model) {
+  vif <- vif(model)
+  summary_model <- summary(model)
+  par(mfrow=c(1,2), mar=c(2,2,2,1),tck=-0.04)
+  plot(model, which=2)
+  plot(model, which=1)
+  par(mfrow=c(1,1), mai=c(1.02,0.82,1.02,0.82))
+  hats=hatvalues(model)
+  summary_hats <- summary(hats)
+  return_obj <- list(summary_hats, vif, summary_model)
+  names(return_obj)<-c('summary.hats', 'VIF','summary.model')
+  
+  return(return_obj)
+}
+
+create_output <- function(model, hc_se=T) {
+  s <- summary(model)$coefficient
+  # try to get hetero SE using sandwich
+  se_hc <- data.frame(sqrt(diag(vcovHC(model, type="HC1"))))
+  s <- merge(s, se_hc,by=0, all=T, sort=F)
+  colnames(s) <- c('var', "coef", "se", "tval", "pval", "se_hc")
+  if (hc_se==T) {
+    colnames(s) <- c('var', "coef", "se_raw", "tval", "pval", "se")
+  }
+  s$change <- exp(s$coef)-1
+  s$changese <- exp(s$coef)*s$se
+  # for the coefficient of logRxcount and Rxcount, RxCount^2, keep original coefficient
+  if ("logrxprmedsno" %in% rownames(s)){
+      s$change <- s$coef
+      s$changese <- s$se}
+  s$changelcl <- s$change-1.96*s$changese
+  s$changeucl <- s$change+1.96*s$changese
+  s$est_ci <- paste0(format(round(s$change, 2), nsmall = 2),
+                     '[', format(round(s$changelcl, 2), nsmall = 2),
+                     ' ',format(round(s$changeucl, 2), nsmall = 2), ']')
+  s$est_se <- paste0(format(round(s$change, 2), nsmall = 2),
+                     '(', format(round(s$changese, 2), nsmall = 2),')')
+  s$p_value <- format(round(s$pval, 3), nsmall = 3)
+  s$p_value[s$pval<=0.01] <- '<0.01***'
+  s$p_value[s$pval<=0.05 & s$pval>0.01] <- 
+    paste0(s$p_value[s$pval<=0.05 & s$pval>0.01], "**")
+  s$p_value[s$pval<=0.1 & s$pval>0.05] <- 
+    paste0(s$p_value[s$pval<=0.1 & s$pval>0.05], "*")
+  
+  return (s)
+}
+
+create_outputyr <- function(model, hc_se=T) {
+  s <- data.frame(summary(model)$coefficient)
+  # try to get hetero SE using sandwich
+  se_hc <- sqrt(diag(vcovHC(model, type="HC1")))
+  s <- merge(s, se_hc,by=0, all=T, sort=F)
+  colnames(s) <- c('var', "coef", "se", "tval", "pval", "se_hc")
+  if (hc_se==T) {
+    colnames(s) <- c('var', "coef", "se_raw", "tval", "pval", "se")
+  }
+  s['pval_raw'] <- s$pval
+  # get the covariance matrix to calculate the se(beta_1+beta_2)
+  V <- vcov(model)
+  if (hc_se==T) {
+    V <- vcovHC(model, type="HC1")
+  }
+
+  # update the coefficient for the year and instype interaction, to 
+  # represent the spending premium (from Medicaid) in each year
+  for (var in c("instypeMedicarePartD", "instypeMedicare+", "instypePHI",
+               "instypeMedicaid+", "instypeUninsured")){
+    for (yr in c(2017)) {
+      var_to_update <- paste0("year",yr,":", var)
+      # update the coefficient
+      s[s$var==var_to_update, 'coef'] <- 
+        s[s$var==var_to_update, 'coef']+s[s$var==var, 'coef']
+      # !!IMPORTANT: update the se for the interaction 
+      related_var <- c(var, var_to_update)
+      cov_matrix <- V[related_var, related_var]
+      s[s$var==var_to_update, 'se'] <- sqrt(t(c(1,1))%*%cov_matrix%*%c(1,1))
+      
+      # !! update the p-value
+      # https://www.cyclismo.org/tutorial/R/pValues.html
+      s[s$var==var_to_update, 'pval'] <- 2*pt(
+        -abs(s[s$var==var_to_update, 'coef']/s[s$var==var_to_update, 'se']),
+        df.residual(model)) # the degree of freedom
+    }
+  }
+  
+  s$change <- exp(s$coef)-1
+  s$changese <- exp(s$coef)*s$se
+  # for the coefficient of logRxcount and Rxcount, RxCount^2, keep original coefficient
+  if ('logrxprmedsno' %in% rownames(s)){
+      s$change <- s$coef
+      s$changese <- s$se
+    }
+  s$changelcl <- s$change-1.96*s$changese
+  s$changeucl <- s$change+1.96*s$changese
+  s$est_ci <- paste0(format(round(s$change, 2), nsmall = 2),
+                     '[', format(round(s$changelcl, 2), nsmall = 2),
+                     ' ',format(round(s$changeucl, 2), nsmall = 2), ']')
+  s$est_se <- paste0(format(round(s$change, 2), nsmall = 2),
+                     '(', format(round(s$changese, 2), nsmall = 2),')')
+  s$p_value <- format(round(s$pval, 3), nsmall = 3)
+  s$p_value[s$pval<=0.01] <- '<0.01***'
+  s$p_value[s$pval<=0.05 & s$pval>0.01] <- 
+    paste0(s$p_value[s$pval<=0.05 & s$pval>0.01], "**")
+  s$p_value[s$pval<=0.1 & s$pval>0.05] <- 
+    paste0(s$p_value[s$pval<=0.1 & s$pval>0.05], "*")
+  
+  return (s)
+}
+
+# wb <- createWorkbook()
+# addWorksheet(wb, 'OLS1')
+# addWorksheet(wb, 'POLS')
+# addWorksheet(wb, 'RE')
+# addWorksheet(wb, 'OLS2')
+# addWorksheet(wb, 'OLS3')
+# 
+# # output our model result into the worksheet
+# writeData(wb, 1, create_outputyr(gols), rowNames = F, colNames = T)
+# writeData(wb, 2, create_outputyr(pols), rowNames = F, colNames = T)
+# writeData(wb, 3, create_outputyr(re), rowNames = F, colNames = T)
+# writeData(wb, 4, create_output(rxols18), rowNames = F, colNames = T)
+# writeData(wb, 5, create_outputyr(rxols1718), rowNames = F, colNames = T)
+# 
+# # save worksheet
+# saveWorkbook(wb, "regression_summary.xlsx", overwrite = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# make the plot of the coefficient
+# https://cran.r-project.org/web/packages/dotwhisker/vignettes/dotwhisker-vignette.html
+# function to create the table for plot
+dwplot_tbl <- function(modelname){
+  model <- eval(sym(modelname))
+  keep_row <- c("instypeMedicarePartD", "instypeMedicare+", "instypePHI",
+               "instypeMedicaid+", "instypeUninsured")
+  keep_column <- c("var","change", "changese")
+  temp=create_output(model) %>%
+    filter(var %in% keep_row) %>%
+    select(keep_column)
+  colnames(temp) <- c("term","estimate", "std.error")
+  temp$term <- sub("^instype", "", temp$term)
+  temp$model<- modelname
+  return (temp)
+}
+
+OLS1 <- gols
+POLS <- pols
+RE <- re
+OLS2 <- rxols18
+OLS3 <- rxols1718
+
+tbl <- data.frame()
+for (m in c("OLS1", "POLS", "RE", "OLS2", "OLS3")) {
+  temp <- dwplot_tbl(m)
+  temp$estimate <- temp$estimate*100
+  temp$std.error <- temp$std.error*100
+  tbl <- rbind(tbl,temp)
+}
+
+#### make the plots for model 1-8
+dwplot(tbl,
+       vline = geom_vline(xintercept = 0, colour = "grey60", linetype = 2), # plot line at zero _behind_ coefs
+       dot_args = list(aes(shape = model), size=2),
+       whisker_args = list(size=0.8)
+       ) +
+    theme_bw() + xlab("spending premium (%) compared with Medicaid Only") + ylab("") +
+    ggtitle("Health plan effect on Rx spending (2018)") +
+    theme(plot.title = element_text(size=15, face="bold"),
+          legend.position = c(0.007, 0.54),
+          legend.text=element_text(size=13),
+          legend.key.size = unit(0.8, "cm"),
+          legend.justification = c(0, 0),
+          legend.background = element_rect(colour="grey80"),
+          legend.title=element_blank(),
+          axis.text = element_text(color="black", size=14),
+          axis.title = element_text(color="black", size=15))
+```
+
+
