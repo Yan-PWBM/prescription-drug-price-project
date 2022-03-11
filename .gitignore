@@ -1,4 +1,4 @@
-/Data
-/.Rproj.user
 *.xlsx
 *.csv
+Analysis/.Rproj.user/
+Analysis/Data/
