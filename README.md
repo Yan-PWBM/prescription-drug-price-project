@@ -1,5 +1,5 @@
 # prescription-drug-price-project
-Applied Econometrics Project
+Applied Econometrics Project, analysis conducted by R (markdown)
 
 This study examines how insurance plans with different underlying prescription drug price affect individuals’ prescription drug expenditures—total payments made by all sources, including out-of-pocket and insurance payments. Analysis of a national medical expenditure survey reveals that insured people with Medicare/Part D and Private Health Insurance plans have significantly more Rx expenditure than individuals with Medicaid coverage only, largely driven by underlying price inequality.
 
